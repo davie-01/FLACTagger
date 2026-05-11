@@ -10,6 +10,7 @@ import AppKit
 class FLACParser {
     
     // MARK: - 公开方法：解析整个 FLAC 文件，填充 FLACTrack 对象
+    @MainActor
     static func parse(track: FLACTrack) {
         guard let data = try? Data(contentsOf: track.url) else { return }
         
@@ -407,21 +408,36 @@ class FLACParser {
     
     // MARK: - 在 FLAC 数据中替换 Vorbis Comment 块
     private static func replaceVorbisComment(in data: Data, with newBlock: Data) -> Data? {
-        var offset = 4 // 跳过 "fLaC"
-        var result = Data(data[..<4])
-        var found = false
+        guard data.count >= 4 else { return nil }
         
+        // 保留 fLaC 标识头（4字节）
+        var result = Data(data[data.startIndex..<data.startIndex.advanced(by: 4)])
+        var offset = 4
+        var found = false
+
         while offset + 4 <= data.count {
-            let headerByte = data[offset]
+            let headerStart = data.startIndex.advanced(by: offset)
+            let headerByte = data[headerStart]
             let blockType = headerByte & 0x7F
             let isLast = (headerByte & 0x80) != 0
-            let blockSize = Int(data[offset+1]) << 16 | Int(data[offset+2]) << 8 | Int(data[offset+3])
-            
-            if blockType == 4 { // VORBIS_COMMENT
-                // 用新块替换，保持 isLast 标志不变
+
+            // 安全读取块大小（3字节大端序）
+            guard offset + 4 <= data.count else { break }
+            let b1 = Int(data[data.startIndex.advanced(by: offset + 1)])
+            let b2 = Int(data[data.startIndex.advanced(by: offset + 2)])
+            let b3 = Int(data[data.startIndex.advanced(by: offset + 3)])
+            let blockSize = (b1 << 16) | (b2 << 8) | b3
+
+            // 检查块数据范围是否合法
+            guard offset + 4 + blockSize <= data.count else { break }
+
+            if blockType == 4 {
+                // 找到 VORBIS_COMMENT 块，用新块替换
                 let newSize = newBlock.count
+                // 保持 isLast 标志，块类型固定为 4
+                let flagByte: UInt8 = isLast ? 0x84 : 0x04
                 let newHeader: [UInt8] = [
-                    (isLast ? 0x84 : 0x04),
+                    flagByte,
                     UInt8((newSize >> 16) & 0xFF),
                     UInt8((newSize >> 8) & 0xFF),
                     UInt8(newSize & 0xFF)
@@ -430,15 +446,24 @@ class FLACParser {
                 result.append(newBlock)
                 found = true
             } else {
-                result.append(data[offset..<offset+4+blockSize])
+                // 其他块原样保留
+                let blockStart = data.startIndex.advanced(by: offset)
+                let blockEnd = data.startIndex.advanced(by: offset + 4 + blockSize)
+                result.append(data[blockStart..<blockEnd])
             }
+
             offset += 4 + blockSize
             if isLast { break }
         }
-        
-        if !found { return nil }
-        // 追加音频数据
-        result.append(data[offset...])
+
+        guard found else { return nil }
+
+        // 追加音频数据（Metadata Block 之后的所有内容）
+        if offset < data.count {
+            let audioStart = data.startIndex.advanced(by: offset)
+            result.append(data[audioStart...])
+        }
+
         return result
     }
     

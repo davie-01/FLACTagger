@@ -91,41 +91,37 @@ class LibraryViewModel: ObservableObject {
     var noArtistCount: Int  { tracks.filter { $0.missingArtist }.count }
     var notSyncedCount: Int { tracks.filter { $0.coverNotSynced }.count }
     
-    // MARK: - 导入文件或文件夹
-    // 支持拖拽和文件选择面板两种方式
+    // MARK: - 导入文件或文件夹（优化版：先显示列表再后台解析）
     func importURLs(_ urls: [URL]) {
-        Task {
+        Task { @MainActor in
             var newTracks: [FLACTrack] = []
             
             for url in urls {
                 var isDir: ObjCBool = false
                 FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-                
                 if isDir.boolValue {
-                    // 是文件夹：扫描里面所有 FLAC 文件
-                    let found = collectFLACFiles(in: url)
-                    newTracks += found
+                    newTracks += collectFLACFiles(in: url)
                 } else if url.pathExtension.lowercased() == "flac" {
-                    // 是单个 FLAC 文件
                     newTracks.append(FLACTrack(url: url))
                 }
             }
             
-            // 去重：已经在列表里的文件不重复添加
+            // 去重
             let existingPaths = Set(tracks.map { $0.url.path })
             let uniqueNew = newTracks.filter { !existingPaths.contains($0.url.path) }
-            
             guard !uniqueNew.isEmpty else { return }
             
-            // 先把文件加入列表（显示占位）
+            // 立即显示文件列表（不等解析完成）
             tracks += uniqueNew
             
-            // 后台并行解析每个文件的元数据
-            await withTaskGroup(of: Void.self) { group in
-                for track in uniqueNew {
-                    group.addTask { @MainActor in
-                        FLACParser.parse(track: track)
-                    }
+
+            
+            // 逐个解析，在主线程执行避免并发问题
+            for (index, track) in uniqueNew.enumerated() {
+                FLACParser.parse(track: track)
+                // 每解析 20 个让 UI 刷新一次
+                if index % 20 == 0 {
+                    await Task.yield()
                 }
             }
         }
