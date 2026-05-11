@@ -1,24 +1,12 @@
-//
-//  ContentView.swift
-//  FLACTagger
-//
-//  Created by oldbie on 2026/5/11.
-//
-
 import SwiftUI
+
+// ============================================================
+// ContentView.swift
+// App 根视图：直接使用 MainView 作为主界面
+// ============================================================
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        MainView()
     }
-}
-
-#Preview {
-    ContentView()
 }
